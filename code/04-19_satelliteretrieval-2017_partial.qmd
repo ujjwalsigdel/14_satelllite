@@ -128,14 +128,15 @@ The goal is to create a folder structure name that is descriptive and includes:
 Let's do it below:
 ```{r}
 # Set/Create Export Folder
-exportfolder <- paste(site, 
+exportfolder <- paste0("../data/",
+                       paste(site, 
                       item_name, 
                       asset, 
                       lubridate::year(date_start),
                       lubridate::yday(date_start),  
                       lubridate::year(date_end),  
                       lubridate::yday(date_end), 
-                      sep = "-")
+                      sep = "-"))
 
 exportfolder
 ```
