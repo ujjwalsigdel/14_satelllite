@@ -110,21 +110,43 @@ allimages_w <- data.frame(source = rastlist) %>%
            sep = "//",
            into = c("path", "meta"),
            remove = F) %>% 
-  mutate(date = str_sub(meta, 1, 8))
+  mutate(date = str_sub(meta, 1, 8)) %>% 
+  mutate(date = as.Date(date, "%Y%m%d")) %>% 
+  dplyr::select(date, source) %>% 
+  mutate(image = map(source, 
+                     ~read_stars(.x)
+                     )) %>% 
+  mutate(image_w = map(image, 
+                       ~ .x %>% 
+                      split("band") %>% 
+                      mutate(gndvi = (nir-green)/(nir+green)) %>% 
+                      dplyr::select(gndvi)
+                      )) %>% 
+  dplyr::select(date, image_w)
 
-allimages_w
+allimages_w %>% head()
+allimages_w$image_w[[1]]
 
 ```
 
 ```{r}
-
+mapview(allimages_w$image_w[[4]])
 ```
 The images were cropped to the bounding box on Planet's side.  
 Let's further crop them to the field boundary.  
 
 ## Cropping to field boundary  
 ```{r allimages_crop}
-allimages_crop 
+allimages_crop <- allimages_w %>% 
+  mutate(crop = map(image_w,
+                    ~.x %>%
+                      st_crop(boundary)
+                    )) %>% 
+  dplyr::select(date, crop)
+
+
+allimages_crop %>% head()
+mapview(allimages_crop$crop[[4]])
 
 ```
 
@@ -135,12 +157,23 @@ To perform pixel-based analysis, we'll need to extract pixel-level information a
 Before we do that, I want to transform our stars (raster) into sf (vector) for ease of visualization.  
 
 ```{r pixels}
-pixels 
+pixels <- allimages_crop %>% 
+  mutate(pixel = map(crop, 
+                     ~st_as_sf(.x, as_points = F)
+                     )) %>% 
+  unnest(pixel) %>% 
+  group_by(date) %>% 
+  mutate(pixid = 1:length(gndvi)) %>% 
+  ungroup() %>% 
+  st_as_sf() %>% 
+  dplyr::select(date, pixid, gndvi, geometry)
 
+pixels$pixel[[1]]
 # How many rows?
+nrow(pixels)
 
 # Peeking
-
+head(pixels)
 ```
 
 ## Case study: monitoring  
@@ -174,7 +207,16 @@ ggsave("../output/2017_gndvi_ts.png",
 Let's take a sample of the pixels and plot them throughout the season:  
 
 ```{r}
-
+pixels %>% 
+  drop_na() %>% 
+  filter(pixid %in% c(5500:5600)) %>% 
+  ggplot(aes(x = date,
+             y = gndvi,
+             group = pixid
+             ))+
+  geom_line(size = .1, 
+            alpha = .5
+            )
 ```
 
 What happened on July 4th?  
@@ -185,9 +227,15 @@ Based on both plots above, let's remove low quality images based on:
   
 ## Removing low-quality images   
 ```{r}
-pixels_f 
+pixels_f <- pixels %>% 
+  filter(!(date %in% as.Date(c("2017-06-08",
+                    "2017-08-22",
+                    "2017-07-06",
+                    "2017-07-04")
+                    )))
 
 # How many rows?
+nrow(pixels_f)
 
 # Peeking
 
@@ -198,7 +246,19 @@ Now that we have a subset of high-quality images, let's extract the pixel-level 
 ## Pixel-based median  
 Let's visualize what the algorithm will do for us:  
 ```{r}
-median 
+median <- pixels_f %>% 
+  filter(pixid == 5500) %>% 
+  summarise(median = median(gndvi))
+
+median
+
+pixels_f %>% 
+  filter(pixid ==5500) %>% 
+  ggplot()+
+  geom_line(aes(x = date,
+                y = gndvi))+
+  geom_hline(yintercept = median$median,
+             color = "red")
 
 
 ```
@@ -214,15 +274,24 @@ Therefore, below we will:
   - bring geometry back.  
 
 ```{r geometrybackup}
-geometrybackup 
+geometrybackup <- pixels_f %>% 
+  filter(date == "2017-04-21") %>% 
+  dplyr::select(pixid, geometry)
 
 geometrybackup
 ```
 
 ```{r pixel_median}
 # Pixel-based median
-pixel_median 
+pixel_median <- pixels_f %>% 
+  st_drop_geometry() %>% 
+  drop_na(gndvi) %>% 
+  group_by(pixid) %>% 
+  summarise(gndvi = median(gndvi, na.rm = T)) %>% 
+  left_join(geometrybackup) %>% 
+  st_as_sf()
 
+pixel_median
 ```
 
 Let's visualize it.  
@@ -248,12 +317,14 @@ ggsave("../output/2017_gndvi_median.png",
 ```
 
 How does it compare to 2017 yield for this field?  
-![](../../07 yield monitor/output/2017_interpolated_yield.png)
+![](../../07_yield_monitor/output/2017_interpolated_yield.png")
 
 ## Exporting median  
 Let's export the median so we can further analyze it in the next script.  
 ```{r}
-
+pixel_median %>% 
+  write_sf("../data/2017_pixel_median.geojson",
+           delete_dsn = T)
 
 ```
 
